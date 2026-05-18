@@ -9,10 +9,6 @@ import es.nspc.voz.core.auth.SupabaseAuthRepository
 import es.nspc.voz.core.telephony.TelephonyController
 import es.nspc.voz.core.telephony.TelnyxTelephonyController
 
-/**
- * DI manual minimal: la app v1 no necesita Hilt. Singletons inicializados
- * en Application.onCreate y accedidos como propiedades estáticas.
- */
 object ServiceLocator {
     private lateinit var appContext: Context
 

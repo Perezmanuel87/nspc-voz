@@ -12,29 +12,42 @@ import androidx.core.app.NotificationCompat
 import es.nspc.voz.MainActivity
 import es.nspc.voz.R
 import es.nspc.voz.ServiceLocator
+import es.nspc.voz.core.network.NetType
+import es.nspc.voz.core.network.NetworkChangeWatcher
 import es.nspc.voz.core.telephony.CallState
 import es.nspc.voz.core.telephony.RegisterState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.min
 
 /**
- * Mantiene el TelnyxClient registrado en SIP mientras el servicio esté vivo.
- * Sin push (FCM) en v1: este servicio always-on es la única vía para recibir
- * llamadas. Coste: ~3-5% batería/hora, pero garantiza estabilidad.
+ * Foreground service que mantiene el TelnyxClient registrado en SIP:
+ *
+ *  - **Auto-retry exponential backoff** (1s, 2s, 4s, 8s, max 30s) si la
+ *    registración cae después de haber estado registrada.
+ *  - **NetworkCallback** detecta WiFi↔4G y fuerza reconnect limpio en cuanto
+ *    hay red de nuevo.
+ *  - **Heartbeat** cada 60s pinguea /api/app/heartbeat con el register_state
+ *    para que el cron health-monitor detecte gestores offline.
+ *  - **Notificación dinámica** refleja estado: Disponible/Conectando/En llamada.
  */
 class TelephonyForegroundService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observeJob: Job? = null
+    private var networkJob: Job? = null
+    private var heartbeatJob: Job? = null
     private var retryJob: Job? = null
     private var hasBeenRegistered = false
+    private var retryAttempt = 0
+    private var lastKnownNet: NetType = NetType.NONE
 
     companion object {
         private const val CHANNEL_ID = "telephony_persistent"
@@ -58,9 +71,7 @@ class TelephonyForegroundService : Service() {
         super.onCreate()
         createChannel()
         startForeground(NOTIF_ID, buildNotification("NSPC Voz", "Conectando…"))
-        scope.launch {
-            ServiceLocator.telephony.connectAndRegister()
-        }
+        scope.launch { ServiceLocator.telephony.connectAndRegister() }
         observeJob = scope.launch {
             combine(
                 ServiceLocator.telephony.registerState,
@@ -71,23 +82,49 @@ class TelephonyForegroundService : Service() {
                     scheduleRetryIfNeeded(reg)
                 }
         }
+        networkJob = scope.launch {
+            NetworkChangeWatcher(this@TelephonyForegroundService).observe().collect { net ->
+                val changed = net != lastKnownNet
+                lastKnownNet = net
+                if (changed && net != NetType.NONE && hasBeenRegistered) {
+                    // Forzar reconexión limpia al cambiar de red
+                    retryJob?.cancel()
+                    retryJob = scope.launch {
+                        ServiceLocator.telephony.disconnect()
+                        ServiceLocator.telephony.connectAndRegister()
+                        retryJob = null
+                    }
+                }
+            }
+        }
+        heartbeatJob = scope.launch {
+            while (isActive) {
+                val state = when (ServiceLocator.telephony.registerState.value) {
+                    is RegisterState.Registered -> "registered"
+                    is RegisterState.Connecting -> "connecting"
+                    is RegisterState.Failed -> "failed"
+                    is RegisterState.Disconnected -> "disconnected"
+                }
+                ServiceLocator.telefoniaApi.heartbeat(state)
+                delay(60_000L)
+            }
+        }
     }
 
     private fun scheduleRetryIfNeeded(reg: RegisterState) {
         when (reg) {
             is RegisterState.Registered -> {
                 hasBeenRegistered = true
+                retryAttempt = 0
                 retryJob?.cancel()
                 retryJob = null
             }
             is RegisterState.Disconnected, is RegisterState.Failed -> {
-                // Solo reintentar si ya habíamos estado registrados (no en arranque inicial,
-                // que ya lo dispara onCreate). Evita loops si las creds son malas.
                 if (hasBeenRegistered && retryJob == null) {
+                    val delayMs = min(30_000L, 1_000L * (1L shl min(retryAttempt, 5)))
+                    retryAttempt += 1
                     retryJob = scope.launch {
-                        delay(5_000)
-                        // disconnect() limpia client=null, sin esto el
-                        // connectAndRegister() tiene early-return y no hace nada.
+                        delay(delayMs)
                         ServiceLocator.telephony.disconnect()
                         ServiceLocator.telephony.connectAndRegister()
                         retryJob = null
@@ -99,32 +136,31 @@ class TelephonyForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         observeJob?.cancel()
+        networkJob?.cancel()
+        heartbeatJob?.cancel()
         retryJob?.cancel()
         scope.launch { ServiceLocator.telephony.disconnect() }
+        scope.cancel()
         super.onDestroy()
     }
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Telefonía",
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = "Mantiene el softphone conectado"
-                setShowBadge(false)
-            }
-            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+            val nm = getSystemService(NotificationManager::class.java) ?: return
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Telefonía", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "Mantiene el softphone conectado"
+                    setShowBadge(false)
+                },
+            )
         }
     }
 
     private fun updateNotification(reg: RegisterState, call: CallState) {
-        val title = "NSPC Voz"
         val text = when {
             call is CallState.Active -> "En llamada · ${call.displayName ?: call.phone}"
             call is CallState.Dialing -> "Llamando · ${call.displayName ?: call.to}"
@@ -135,7 +171,7 @@ class TelephonyForegroundService : Service() {
             else -> "Sin conexión"
         }
         val nm = getSystemService(NotificationManager::class.java) ?: return
-        nm.notify(NOTIF_ID, buildNotification(title, text))
+        nm.notify(NOTIF_ID, buildNotification("NSPC Voz", text))
     }
 
     private fun buildNotification(title: String, text: String): android.app.Notification {
@@ -143,9 +179,7 @@ class TelephonyForegroundService : Service() {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
         val pi = PendingIntent.getActivity(
-            this,
-            0,
-            intent,
+            this, 0, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)

@@ -23,11 +23,11 @@ class TelefoniaApi(private val client: ApiClient) {
             setBody(LlamarRequest(to, clienteId))
         }.body()
 
-    suspend fun postFinalizar(llamadaId: String, duracion: Int?, endReason: String) {
+    suspend fun postFinalizar(llamadaId: String, duracion: Int?, endReason: String, nota: String? = null) {
         client.http.post("/api/telefonia/llamadas/$llamadaId/finalizar") {
             client.bearerHeader()?.let { header(it.first, it.second) }
             contentType(ContentType.Application.Json)
-            setBody(FinalizarRequest(duracion, endReason))
+            setBody(FinalizarRequest(duracion, endReason, nota))
         }
     }
 
@@ -60,6 +60,22 @@ class TelefoniaApi(private val client: ApiClient) {
             parameter("limit", limit)
         }.body<List<HistorialItemDto>>()
     }.getOrDefault(emptyList())
+
+    suspend fun getContexto(clienteId: String): ClienteContextoDto? = runCatching {
+        client.http.get("/api/clientes/$clienteId/contexto") {
+            client.bearerHeader()?.let { header(it.first, it.second) }
+        }.body<ClienteContextoDto>()
+    }.getOrNull()
+
+    suspend fun heartbeat(registerState: String) {
+        runCatching {
+            client.http.post("/api/app/heartbeat") {
+                client.bearerHeader()?.let { header(it.first, it.second) }
+                contentType(ContentType.Application.Json)
+                setBody(HeartbeatRequest(registerState))
+            }
+        }
+    }
 
     suspend fun registerDevice(req: DispositivoRequest) {
         runCatching {
