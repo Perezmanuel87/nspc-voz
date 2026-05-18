@@ -8,6 +8,7 @@ import com.telnyx.webrtc.sdk.TelnyxClient
 import com.telnyx.webrtc.sdk.model.LogLevel
 import com.telnyx.webrtc.sdk.model.SocketMethod
 import com.telnyx.webrtc.sdk.model.SocketStatus
+import com.telnyx.webrtc.sdk.model.TxServerConfiguration
 import com.telnyx.webrtc.sdk.verto.receive.InviteResponse
 import com.telnyx.webrtc.sdk.verto.receive.ReceivedMessageBody
 import es.nspc.voz.core.api.TelefoniaApi
@@ -50,9 +51,12 @@ class TelnyxTelephonyController(
         client = c
         socketJob?.cancel()
         socketJob = scope.launch { observeSocket(c) }
-        c.connect()
-        c.credentialLogin(
-            CredentialConfig(
+        // API recomendada: connect(serverConfig, credentialConfig). El SDK abre
+        // el socket y hace login una vez establecido (vs `connect()` + `credentialLogin()`
+        // que tira "lateinit webSocket not initialized" por race).
+        c.connect(
+            providedServerConfig = TxServerConfiguration(),
+            credentialConfig = CredentialConfig(
                 sipUser = cred.sipUsername,
                 sipPassword = cred.sipPassword,
                 sipCallerIDName = "NSPC Voz",
@@ -62,7 +66,8 @@ class TelnyxTelephonyController(
                 ringBackTone = null,
                 logLevel = LogLevel.NONE,
                 autoReconnect = true,
-            )
+            ),
+            autoLogin = true,
         )
     }.onFailure {
         Log.e(tag, "connectAndRegister failed", it)
@@ -72,11 +77,19 @@ class TelnyxTelephonyController(
     private suspend fun observeSocket(c: TelnyxClient) {
         c.socketResponseFlow.collect { response ->
             when (response.status) {
-                SocketStatus.ESTABLISHED -> Log.d(tag, "socket established")
+                SocketStatus.ESTABLISHED -> {
+                    Log.d(tag, "socket established")
+                    // Si veníamos de Disconnected/Failed, marcar Connecting mientras
+                    // llega CLIENT_READY / LOGIN. Si ya estamos Registered, no tocamos.
+                    if (_registerState.value !is RegisterState.Registered) {
+                        _registerState.value = RegisterState.Connecting
+                    }
+                }
                 SocketStatus.MESSAGERECEIVED -> handleMessage(response.data as? ReceivedMessageBody)
                 SocketStatus.LOADING -> Unit
                 SocketStatus.ERROR -> _registerState.value = RegisterState.Failed(response.errorMessage ?: "socket error")
                 SocketStatus.DISCONNECT -> {
+                    Log.w(tag, "socket DISCONNECT")
                     _registerState.value = RegisterState.Disconnected
                     _callState.value = CallState.Idle
                 }

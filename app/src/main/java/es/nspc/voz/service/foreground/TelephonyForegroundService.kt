@@ -18,7 +18,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /**
@@ -30,6 +33,8 @@ class TelephonyForegroundService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var observeJob: Job? = null
+    private var retryJob: Job? = null
+    private var hasBeenRegistered = false
 
     companion object {
         private const val CHANNEL_ID = "telephony_persistent"
@@ -61,7 +66,35 @@ class TelephonyForegroundService : Service() {
                 ServiceLocator.telephony.registerState,
                 ServiceLocator.telephony.callState,
             ) { reg, call -> Pair(reg, call) }
-                .collect { (reg, call) -> updateNotification(reg, call) }
+                .collect { (reg, call) ->
+                    updateNotification(reg, call)
+                    scheduleRetryIfNeeded(reg)
+                }
+        }
+    }
+
+    private fun scheduleRetryIfNeeded(reg: RegisterState) {
+        when (reg) {
+            is RegisterState.Registered -> {
+                hasBeenRegistered = true
+                retryJob?.cancel()
+                retryJob = null
+            }
+            is RegisterState.Disconnected, is RegisterState.Failed -> {
+                // Solo reintentar si ya habíamos estado registrados (no en arranque inicial,
+                // que ya lo dispara onCreate). Evita loops si las creds son malas.
+                if (hasBeenRegistered && retryJob == null) {
+                    retryJob = scope.launch {
+                        delay(5_000)
+                        // disconnect() limpia client=null, sin esto el
+                        // connectAndRegister() tiene early-return y no hace nada.
+                        ServiceLocator.telephony.disconnect()
+                        ServiceLocator.telephony.connectAndRegister()
+                        retryJob = null
+                    }
+                }
+            }
+            else -> Unit
         }
     }
 
@@ -71,6 +104,7 @@ class TelephonyForegroundService : Service() {
 
     override fun onDestroy() {
         observeJob?.cancel()
+        retryJob?.cancel()
         scope.launch { ServiceLocator.telephony.disconnect() }
         super.onDestroy()
     }

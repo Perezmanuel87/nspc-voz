@@ -86,7 +86,12 @@ fun HomeScreen() {
             TopAppBar(
                 title = { Text("NSPC Voz") },
                 actions = {
-                    AvailabilityChip(registerState)
+                    AvailabilityChip(registerState, onRetry = {
+                        coroutineScope.launch {
+                            ServiceLocator.telephony.disconnect()
+                            ServiceLocator.telephony.connectAndRegister()
+                        }
+                    })
                     Spacer(Modifier.width(8.dp))
                     TextButton(onClick = {
                         coroutineScope.launch {
@@ -128,14 +133,18 @@ fun HomeScreen() {
 }
 
 @Composable
-private fun AvailabilityChip(reg: RegisterState) {
+private fun AvailabilityChip(reg: RegisterState, onRetry: () -> Unit) {
     val (color, label) = when (reg) {
         is RegisterState.Registered -> Color(0xFF10B981) to "Disponible"
         is RegisterState.Connecting -> Color(0xFFF59E0B) to "Conectando…"
-        is RegisterState.Failed -> Color(0xFFEF4444) to "Sin conexión"
-        is RegisterState.Disconnected -> Color(0xFF6B7280) to "Offline"
+        is RegisterState.Failed -> Color(0xFFEF4444) to "Reintentar"
+        is RegisterState.Disconnected -> Color(0xFF6B7280) to "Reconectar"
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    val enabled = reg is RegisterState.Disconnected || reg is RegisterState.Failed
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = if (enabled) Modifier.clickable { onRetry() } else Modifier,
+    ) {
         Box(Modifier
             .size(10.dp)
             .background(color, CircleShape))
