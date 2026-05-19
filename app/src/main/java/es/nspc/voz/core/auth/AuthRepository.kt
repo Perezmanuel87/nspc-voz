@@ -1,10 +1,12 @@
 package es.nspc.voz.core.auth
 
 import es.nspc.voz.BuildConfig
+import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.gotrue.Auth
 import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.gotrue.providers.builtin.Email
+import io.github.jan.supabase.realtime.Realtime
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,11 +21,12 @@ interface AuthRepository {
     suspend fun signIn(email: String, password: String): Result<AuthState.Authenticated>
     suspend fun signOut()
     suspend fun currentJwt(): String?
+    suspend fun ensureRealtimeAuth()
 }
 
 class SupabaseAuthRepository(private val store: JwtStore) : AuthRepository {
 
-    private val client = createSupabaseClient(
+    val client: SupabaseClient = createSupabaseClient(
         supabaseUrl = BuildConfig.SUPABASE_URL,
         supabaseKey = BuildConfig.SUPABASE_ANON_KEY,
     ) {
@@ -31,6 +34,7 @@ class SupabaseAuthRepository(private val store: JwtStore) : AuthRepository {
             alwaysAutoRefresh = true
             autoLoadFromStorage = false
         }
+        install(Realtime)
     }
 
     private val _state = MutableStateFlow<AuthState>(restoreFromStore())
@@ -110,5 +114,21 @@ class SupabaseAuthRepository(private val store: JwtStore) : AuthRepository {
             val nowSecs = System.currentTimeMillis() / 1000
             (exp - nowSecs) < marginSecs
         }.getOrElse { true }
+    }
+
+    /**
+     * Asegura que el módulo Auth tiene el JWT actual cargado para que las
+     * suscripciones Realtime pasen RLS. Best-effort: si falla, el polling
+     * del PeticionWatcher cubre la recepción igualmente.
+     *
+     * En realtime-kt 2.6.0, no existe Realtime.setAuth(). El módulo Realtime
+     * lee el JWT del módulo Auth automáticamente en cada connect/subscribe,
+     * siempre que haya una sesión activa. Refrescamos la sesión aquí para
+     * garantizar que Auth tiene el token vigente antes de suscribir.
+     */
+    override suspend fun ensureRealtimeAuth() {
+        runCatching {
+            currentJwt() // Refresca la sesión si está a punto de expirar
+        }
     }
 }

@@ -30,6 +30,7 @@ ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "k
 
 supabase-bom = { module = "io.github.jan-tennert.supabase:bom", version.ref = "supabase" }
 supabase-gotrue = { module = "io.github.jan-tennert.supabase:gotrue-kt" }
+supabase-realtime = { module = "io.github.jan-tennert.supabase:realtime-kt" }
 
 telnyx-android = { module = "com.github.team-telnyx:telnyx-webrtc-android", version.ref = "telnyx" }
 

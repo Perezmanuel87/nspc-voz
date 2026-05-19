@@ -73,6 +73,7 @@ dependencies {
 
     implementation(platform(libs.supabase.bom))
     implementation(libs.supabase.gotrue)
+    implementation(libs.supabase.realtime)
 
     implementation(libs.telnyx.android)
 
