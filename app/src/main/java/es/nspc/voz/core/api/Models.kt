@@ -61,6 +61,7 @@ data class HistorialItemDto(
     @SerialName("created_at") val createdAt: String,
     @SerialName("ended_at") val endedAt: String? = null,
     val cliente: ClienteDto? = null,
+    val asunto: String? = null,
 )
 
 @Serializable
@@ -129,4 +130,21 @@ data class AceptarResponse(
     @SerialName("gestion_id") val gestionId: String? = null,
     val transferido: Boolean = false,
     @SerialName("auto_call") val autoCall: AutoCall? = null,
+)
+
+@Serializable
+data class SmsPlantillaDto(
+    val id: String,
+    val nombre: String,
+)
+
+@Serializable
+data class SmsPlantillasResponse(
+    val plantillas: List<SmsPlantillaDto> = emptyList(),
+)
+
+@Serializable
+data class SmsPreviewResponse(
+    val texto: String,
+    val segmentos: Int = 1,
 )
