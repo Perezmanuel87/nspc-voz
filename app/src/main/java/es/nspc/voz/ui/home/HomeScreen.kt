@@ -63,7 +63,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(onOpenSettings: () -> Unit) {
+fun HomeScreen(onOpenSettings: () -> Unit, onOpenFicha: (String) -> Unit) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val registerState by ServiceLocator.telephony.registerState.collectAsState()
@@ -118,7 +118,7 @@ fun HomeScreen(onOpenSettings: () -> Unit) {
                         Text("Recientes", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
                         HistorialList(historial, onCall = { phone, name, cid ->
                             coroutineScope.launch { ServiceLocator.telephony.callOut(phone, cid, name) }
-                        })
+                        }, onOpenFicha = onOpenFicha)
                     }
                     androidx.compose.material3.VerticalDivider()
                     Column(modifier = Modifier
@@ -140,7 +140,7 @@ fun HomeScreen(onOpenSettings: () -> Unit) {
                     when (tab) {
                         0 -> HistorialList(historial, onCall = { phone, name, cid ->
                             coroutineScope.launch { ServiceLocator.telephony.callOut(phone, cid, name) }
-                        })
+                        }, onOpenFicha = onOpenFicha)
                         1 -> DialerTab(onCall = { phone -> coroutineScope.launch { ServiceLocator.telephony.callOut(phone, null, null) } })
                     }
                 }
@@ -174,6 +174,7 @@ private fun AvailabilityChip(reg: RegisterState, onRetry: () -> Unit) {
 private fun HistorialList(
     historial: List<HistorialItemDto>,
     onCall: (phone: String, displayName: String?, clienteId: String?) -> Unit,
+    onOpenFicha: (String) -> Unit,
 ) {
     if (historial.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -190,7 +191,11 @@ private fun HistorialList(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = phone != null) { phone?.let { onCall(it, displayName, item.cliente?.id) } }
+                    .clickable(enabled = phone != null || item.cliente?.id != null) {
+                        val cid = item.cliente?.id
+                        if (cid != null) onOpenFicha(cid)
+                        else phone?.let { onCall(it, displayName, null) }
+                    }
                     .padding(horizontal = 12.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -203,9 +208,10 @@ private fun HistorialList(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(displayName ?: phone ?: "?", fontWeight = FontWeight.Medium, maxLines = 1)
                     Text(
-                        "${item.createdAt.take(16).replace('T', ' ')} · ${item.estado}",
+                        item.asunto ?: "${item.createdAt.take(16).replace('T', ' ')} · ${item.estado}",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
+                        maxLines = 1,
                     )
                 }
                 item.duracionSegundos?.let {

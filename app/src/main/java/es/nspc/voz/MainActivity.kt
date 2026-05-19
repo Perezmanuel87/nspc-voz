@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import es.nspc.voz.core.auth.AuthState
+import es.nspc.voz.ui.cliente.ClienteFichaScreen
 import es.nspc.voz.ui.home.HomeScreen
 import es.nspc.voz.ui.login.LoginScreen
 import es.nspc.voz.ui.onboarding.OnboardingScreen
@@ -51,7 +52,14 @@ class MainActivity : ComponentActivity() {
                             route = Route.Home
                         })
                         route is Route.Settings -> SettingsScreen(onBack = { route = Route.Home })
-                        else -> HomeScreen(onOpenSettings = { route = Route.Settings })
+                        route is Route.ClienteFicha -> ClienteFichaScreen(
+                            clienteId = (route as Route.ClienteFicha).clienteId,
+                            onBack = { route = Route.Home },
+                        )
+                        else -> HomeScreen(
+                            onOpenSettings = { route = Route.Settings },
+                            onOpenFicha = { clienteId -> route = Route.ClienteFicha(clienteId) },
+                        )
                     }
                 }
             }
@@ -79,4 +87,5 @@ private sealed interface Route {
     data object Auto : Route
     data object Home : Route
     data object Settings : Route
+    data class ClienteFicha(val clienteId: String) : Route
 }
