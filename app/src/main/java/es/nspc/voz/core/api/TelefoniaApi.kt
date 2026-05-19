@@ -54,10 +54,11 @@ class TelefoniaApi(private val client: ApiClient) {
         }.body<List<ClienteDto>>()
     }.getOrDefault(emptyList())
 
-    suspend fun historial(limit: Int = 50): List<HistorialItemDto> = runCatching {
+    suspend fun historial(limit: Int = 50, clienteId: String? = null): List<HistorialItemDto> = runCatching {
         client.http.get("/api/telefonia/historial") {
             client.bearerHeader()?.let { header(it.first, it.second) }
             parameter("limit", limit)
+            if (clienteId != null) parameter("cliente_id", clienteId)
         }.body<List<HistorialItemDto>>()
     }.getOrDefault(emptyList())
 
