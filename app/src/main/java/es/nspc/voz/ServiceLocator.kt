@@ -6,6 +6,8 @@ import es.nspc.voz.core.api.TelefoniaApi
 import es.nspc.voz.core.auth.AuthRepository
 import es.nspc.voz.core.auth.JwtStore
 import es.nspc.voz.core.auth.SupabaseAuthRepository
+import es.nspc.voz.core.peticiones.PeticionWatcher
+import es.nspc.voz.core.peticiones.PeticionesApi
 import es.nspc.voz.core.telephony.TelephonyController
 import es.nspc.voz.core.telephony.TelnyxTelephonyController
 
@@ -17,6 +19,15 @@ object ServiceLocator {
     val apiClient: ApiClient by lazy { ApiClient(auth) }
     val telefoniaApi: TelefoniaApi by lazy { TelefoniaApi(apiClient) }
     val telephony: TelephonyController by lazy { TelnyxTelephonyController(appContext, telefoniaApi) }
+    val peticionesApi: PeticionesApi by lazy { PeticionesApi(apiClient) }
+    val peticionWatcher: PeticionWatcher by lazy {
+        PeticionWatcher(
+            supabase = (auth as SupabaseAuthRepository).client,
+            auth = auth as SupabaseAuthRepository,
+            peticionesApi = peticionesApi,
+            telefoniaApi = telefoniaApi,
+        )
+    }
 
     fun init(context: Context) {
         appContext = context.applicationContext
