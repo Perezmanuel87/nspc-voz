@@ -16,9 +16,11 @@ import es.nspc.voz.R
 import es.nspc.voz.ServiceLocator
 import es.nspc.voz.core.network.NetType
 import es.nspc.voz.core.network.NetworkChangeWatcher
+import es.nspc.voz.core.peticiones.PeticionUi
 import es.nspc.voz.core.telephony.CallState
 import es.nspc.voz.core.telephony.RegisterState
 import es.nspc.voz.ui.call.IncomingCallActivity
+import es.nspc.voz.ui.peticion.IncomingPetitionActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,6 +52,7 @@ class TelephonyForegroundService : Service() {
     private var networkJob: Job? = null
     private var heartbeatJob: Job? = null
     private var retryJob: Job? = null
+    private var peticionJob: Job? = null
     private var hasBeenRegistered = false
     private var retryAttempt = 0
     private var lastKnownNet: NetType = NetType.NONE
@@ -61,6 +64,8 @@ class TelephonyForegroundService : Service() {
         private const val CHANNEL_INCOMING_SILENT_ID = "telephony_incoming_silent"
         private const val NOTIF_ID = 1001
         private const val NOTIF_INCOMING_ID = 1002
+        private const val CHANNEL_PETICION_ID = "peticiones_humano"
+        private const val NOTIF_PETICION_ID = 1003
 
         const val ACTION_ANSWER = "es.nspc.voz.action.ANSWER"
         const val ACTION_REJECT = "es.nspc.voz.action.REJECT"
@@ -123,6 +128,12 @@ class TelephonyForegroundService : Service() {
                 delay(60_000L)
             }
         }
+        ServiceLocator.peticionWatcher.start(scope)
+        peticionJob = scope.launch {
+            ServiceLocator.peticionWatcher.activa.collect { peticion ->
+                updatePeticionNotification(peticion)
+            }
+        }
     }
 
     private fun scheduleRetryIfNeeded(reg: RegisterState) {
@@ -174,6 +185,8 @@ class TelephonyForegroundService : Service() {
         networkJob?.cancel()
         heartbeatJob?.cancel()
         retryJob?.cancel()
+        peticionJob?.cancel()
+        ServiceLocator.peticionWatcher.stop()
         scope.launch { ServiceLocator.telephony.disconnect() }
         scope.cancel()
         super.onDestroy()
@@ -206,6 +219,18 @@ class TelephonyForegroundService : Service() {
                 description = "Entrante silenciada por el usuario, sin sonido ni vibración"
                 setSound(null, null)
                 enableVibration(false)
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_PETICION_ID,
+                "Peticiones de cliente",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Un cliente pide hablar con un gestor"
+                setSound(ringtoneUri, audioAttrs)
+                enableVibration(true)
+                setBypassDnd(true)
             },
         )
     }
@@ -299,5 +324,35 @@ class TelephonyForegroundService : Service() {
             this, requestCode, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+    }
+
+    private fun updatePeticionNotification(peticion: PeticionUi?) {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        if (peticion == null) {
+            nm.cancel(NOTIF_PETICION_ID)
+            return
+        }
+        nm.notify(NOTIF_PETICION_ID, buildPeticionNotification(peticion))
+    }
+
+    private fun buildPeticionNotification(peticion: PeticionUi): android.app.Notification {
+        val fullScreenIntent = Intent(this, IncomingPetitionActivity::class.java).addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP,
+        )
+        val fullScreenPi = PendingIntent.getActivity(
+            this, 200, fullScreenIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        return NotificationCompat.Builder(this, CHANNEL_PETICION_ID)
+            .setContentTitle("Un cliente pide un gestor")
+            .setContentText(peticion.clienteNombre ?: peticion.callerPhone)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setFullScreenIntent(fullScreenPi, true)
+            .setContentIntent(fullScreenPi)
+            .build()
     }
 }
