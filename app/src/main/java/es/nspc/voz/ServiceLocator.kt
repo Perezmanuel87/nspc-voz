@@ -3,6 +3,7 @@ package es.nspc.voz
 import android.content.Context
 import es.nspc.voz.core.api.ApiClient
 import es.nspc.voz.core.api.TelefoniaApi
+import es.nspc.voz.core.sms.SmsApi
 import es.nspc.voz.core.auth.AuthRepository
 import es.nspc.voz.core.auth.JwtStore
 import es.nspc.voz.core.auth.SupabaseAuthRepository
@@ -18,6 +19,7 @@ object ServiceLocator {
     val auth: AuthRepository by lazy { SupabaseAuthRepository(jwtStore) }
     val apiClient: ApiClient by lazy { ApiClient(auth) }
     val telefoniaApi: TelefoniaApi by lazy { TelefoniaApi(apiClient) }
+    val smsApi: SmsApi by lazy { SmsApi(apiClient) }
     val telephony: TelephonyController by lazy { TelnyxTelephonyController(appContext, telefoniaApi) }
     val peticionesApi: PeticionesApi by lazy { PeticionesApi(apiClient) }
     val peticionWatcher: PeticionWatcher by lazy {
