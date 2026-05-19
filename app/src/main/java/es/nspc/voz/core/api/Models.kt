@@ -101,3 +101,32 @@ data class ClienteContextoDto(
 data class HeartbeatRequest(
     @SerialName("register_state") val registerState: String,
 )
+
+@Serializable
+data class PeticionPendiente(
+    val id: String,
+    @SerialName("caller_phone") val callerPhone: String,
+    @SerialName("cliente_id") val clienteId: String? = null,
+    val motivo: String? = null,
+    val estado: String,
+    @SerialName("aceptada_por") val aceptadaPor: String? = null,
+)
+
+@Serializable
+data class PendientesResponse(
+    val peticiones: List<PeticionPendiente> = emptyList(),
+)
+
+@Serializable
+data class AutoCall(
+    val numero: String,
+    @SerialName("cliente_id") val clienteId: String? = null,
+)
+
+@Serializable
+data class AceptarResponse(
+    val ok: Boolean = false,
+    @SerialName("gestion_id") val gestionId: String? = null,
+    val transferido: Boolean = false,
+    @SerialName("auto_call") val autoCall: AutoCall? = null,
+)
