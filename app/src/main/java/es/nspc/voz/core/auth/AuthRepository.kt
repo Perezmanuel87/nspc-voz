@@ -65,7 +65,6 @@ class SupabaseAuthRepository(private val store: JwtStore) : AuthRepository {
     }
 
     override suspend fun currentJwt(): String? {
-        // Intenta refresh si el token está cerca de expirar
         return runCatching {
             val session = client.auth.currentSessionOrNull()
             if (session != null) {
@@ -74,10 +73,42 @@ class SupabaseAuthRepository(private val store: JwtStore) : AuthRepository {
                 if (expiresAt - nowSecs < 60) {
                     client.auth.refreshCurrentSession()
                 }
-                client.auth.currentAccessTokenOrNull()
-            } else {
-                store.jwt()
+                return@runCatching client.auth.currentAccessTokenOrNull()
             }
+
+            val storedJwt = store.jwt() ?: return@runCatching null
+            if (!isJwtNearExpiry(storedJwt)) return@runCatching storedJwt
+
+            val refresh = store.refreshToken() ?: return@runCatching null
+            val refreshed = client.auth.refreshSession(refresh)
+            val newJwt = refreshed.accessToken
+            store.save(
+                newJwt,
+                refreshed.refreshToken,
+                store.userId() ?: "",
+                store.email() ?: "",
+            )
+            _state.value = AuthState.Authenticated(
+                store.userId() ?: "",
+                store.email() ?: "",
+                newJwt,
+            )
+            newJwt
         }.getOrElse { store.jwt() }
+    }
+
+    private fun isJwtNearExpiry(jwt: String, marginSecs: Long = 60): Boolean {
+        return runCatching {
+            val parts = jwt.split(".")
+            if (parts.size < 2) return@runCatching true
+            val payload = android.util.Base64.decode(
+                parts[1],
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+            ).toString(Charsets.UTF_8)
+            val exp = Regex("\"exp\"\\s*:\\s*(\\d+)")
+                .find(payload)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
+            val nowSecs = System.currentTimeMillis() / 1000
+            (exp - nowSecs) < marginSecs
+        }.getOrElse { true }
     }
 }
