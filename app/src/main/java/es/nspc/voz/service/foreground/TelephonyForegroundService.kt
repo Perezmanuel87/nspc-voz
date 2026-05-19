@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -16,6 +18,7 @@ import es.nspc.voz.core.network.NetType
 import es.nspc.voz.core.network.NetworkChangeWatcher
 import es.nspc.voz.core.telephony.CallState
 import es.nspc.voz.core.telephony.RegisterState
+import es.nspc.voz.ui.call.IncomingCallActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,7 +39,9 @@ import kotlin.math.min
  *    hay red de nuevo.
  *  - **Heartbeat** cada 60s pinguea /api/app/heartbeat con el register_state
  *    para que el cron health-monitor detecte gestores offline.
- *  - **Notificación dinámica** refleja estado: Disponible/Conectando/En llamada.
+ *  - **Notificación persistente** refleja estado: Disponible/Conectando/En llamada.
+ *  - **Notificación de entrante** con FullScreenIntent + acciones Aceptar/
+ *    Silenciar/Rechazar disparadas vía PendingIntent al propio service.
  */
 class TelephonyForegroundService : Service() {
 
@@ -48,10 +53,18 @@ class TelephonyForegroundService : Service() {
     private var hasBeenRegistered = false
     private var retryAttempt = 0
     private var lastKnownNet: NetType = NetType.NONE
+    private var lastIncomingSilenced: Boolean? = null
 
     companion object {
         private const val CHANNEL_ID = "telephony_persistent"
+        private const val CHANNEL_INCOMING_ID = "telephony_incoming"
+        private const val CHANNEL_INCOMING_SILENT_ID = "telephony_incoming_silent"
         private const val NOTIF_ID = 1001
+        private const val NOTIF_INCOMING_ID = 1002
+
+        const val ACTION_ANSWER = "es.nspc.voz.action.ANSWER"
+        const val ACTION_REJECT = "es.nspc.voz.action.REJECT"
+        const val ACTION_SILENCE = "es.nspc.voz.action.SILENCE"
 
         fun start(context: Context) {
             val intent = Intent(context, TelephonyForegroundService::class.java)
@@ -69,8 +82,8 @@ class TelephonyForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createChannel()
-        startForeground(NOTIF_ID, buildNotification("NSPC Voz", "Conectando…"))
+        createChannels()
+        startForeground(NOTIF_ID, buildPersistentNotification("NSPC Voz", "Conectando…"))
         scope.launch { ServiceLocator.telephony.connectAndRegister() }
         observeJob = scope.launch {
             combine(
@@ -78,7 +91,8 @@ class TelephonyForegroundService : Service() {
                 ServiceLocator.telephony.callState,
             ) { reg, call -> Pair(reg, call) }
                 .collect { (reg, call) ->
-                    updateNotification(reg, call)
+                    updatePersistentNotification(reg, call)
+                    updateIncomingNotification(call)
                     scheduleRetryIfNeeded(reg)
                 }
         }
@@ -135,7 +149,24 @@ class TelephonyForegroundService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_ANSWER -> {
+                scope.launch {
+                    ServiceLocator.telephony.answer()
+                    // Abrir la app para que aparezca la pantalla de llamada activa.
+                    startActivity(
+                        Intent(this@TelephonyForegroundService, MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    )
+                }
+            }
+            ACTION_REJECT -> scope.launch { ServiceLocator.telephony.reject() }
+            ACTION_SILENCE -> scope.launch { ServiceLocator.telephony.silence() }
+        }
+        return START_STICKY
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
@@ -148,19 +179,38 @@ class TelephonyForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = getSystemService(NotificationManager::class.java) ?: return
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Telefonía", NotificationManager.IMPORTANCE_LOW).apply {
-                    description = "Mantiene el softphone conectado"
-                    setShowBadge(false)
-                },
-            )
-        }
+    private fun createChannels() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "Telefonía", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Mantiene el softphone conectado"
+                setShowBadge(false)
+            },
+        )
+        val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+        val audioAttrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_INCOMING_ID, "Llamadas entrantes", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Notifica con sonido y full-screen las llamadas entrantes"
+                setSound(ringtoneUri, audioAttrs)
+                enableVibration(true)
+                setBypassDnd(true)
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_INCOMING_SILENT_ID, "Llamadas entrantes (silenciadas)", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Entrante silenciada por el usuario, sin sonido ni vibración"
+                setSound(null, null)
+                enableVibration(false)
+            },
+        )
     }
 
-    private fun updateNotification(reg: RegisterState, call: CallState) {
+    private fun updatePersistentNotification(reg: RegisterState, call: CallState) {
         val text = when {
             call is CallState.Active -> "En llamada · ${call.displayName ?: call.phone}"
             call is CallState.Dialing -> "Llamando · ${call.displayName ?: call.to}"
@@ -171,10 +221,26 @@ class TelephonyForegroundService : Service() {
             else -> "Sin conexión"
         }
         val nm = getSystemService(NotificationManager::class.java) ?: return
-        nm.notify(NOTIF_ID, buildNotification("NSPC Voz", text))
+        nm.notify(NOTIF_ID, buildPersistentNotification("NSPC Voz", text))
     }
 
-    private fun buildNotification(title: String, text: String): android.app.Notification {
+    private fun updateIncomingNotification(call: CallState) {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        if (call !is CallState.Ringing) {
+            nm.cancel(NOTIF_INCOMING_ID)
+            lastIncomingSilenced = null
+            return
+        }
+        // Si cambió el flag silenced, cancelar y republicar para que Android detenga el
+        // ringtone y use el canal correcto (los updates con el mismo ID no cortan el sonido).
+        if (lastIncomingSilenced != null && lastIncomingSilenced != call.silenced) {
+            nm.cancel(NOTIF_INCOMING_ID)
+        }
+        lastIncomingSilenced = call.silenced
+        nm.notify(NOTIF_INCOMING_ID, buildIncomingNotification(call))
+    }
+
+    private fun buildPersistentNotification(title: String, text: String): android.app.Notification {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -190,5 +256,48 @@ class TelephonyForegroundService : Service() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+    }
+
+    private fun buildIncomingNotification(ringing: CallState.Ringing): android.app.Notification {
+        val channel = if (ringing.silenced) CHANNEL_INCOMING_SILENT_ID else CHANNEL_INCOMING_ID
+        val title = "Llamada entrante"
+        val text = ringing.displayName ?: ringing.from
+
+        val fullScreenIntent = Intent(this, IncomingCallActivity::class.java).addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP,
+        )
+        val fullScreenPi = PendingIntent.getActivity(
+            this, 100, fullScreenIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val answerPi = servicePendingIntent(101, ACTION_ANSWER)
+        val rejectPi = servicePendingIntent(102, ACTION_REJECT)
+        val silencePi = servicePendingIntent(103, ACTION_SILENCE)
+
+        val builder = NotificationCompat.Builder(this, channel)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setFullScreenIntent(fullScreenPi, true)
+            .setContentIntent(fullScreenPi)
+            .addAction(R.drawable.ic_launcher_foreground, "Rechazar", rejectPi)
+            .addAction(R.drawable.ic_launcher_foreground, if (ringing.silenced) "Silenciado" else "Silenciar", silencePi)
+            .addAction(R.drawable.ic_launcher_foreground, "Aceptar", answerPi)
+        if (ringing.silenced) {
+            builder.setSilent(true)
+        }
+        return builder.build()
+    }
+
+    private fun servicePendingIntent(requestCode: Int, action: String): PendingIntent {
+        val intent = Intent(this, TelephonyForegroundService::class.java).setAction(action)
+        return PendingIntent.getService(
+            this, requestCode, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
     }
 }

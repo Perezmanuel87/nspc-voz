@@ -18,9 +18,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -39,7 +41,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Activity con FullScreenIntent que muestra la pantalla de llamada entrante
- * sobre el lockscreen. La dispara el notification PRIORITY_HIGH con
+ * sobre el lockscreen. La dispara la notificación PRIORITY_MAX con
  * setFullScreenIntent() desde el TelephonyForegroundService cuando llega INVITE.
  */
 class IncomingCallActivity : ComponentActivity() {
@@ -52,21 +54,21 @@ class IncomingCallActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             window.addFlags(
                 android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                    android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                    android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
             )
         }
         setContent { NspcVozTheme { IncomingScreen(onDone = { finish() }) } }
     }
 }
 
-@androidx.compose.runtime.Composable
-private fun IncomingScreen(onDone: () -> Unit) {
+@Composable
+fun IncomingScreen(onDone: () -> Unit) {
     val call by ServiceLocator.telephony.callState.collectAsState()
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(call) {
-        // Si la llamada ya no está en Ringing, cerrar esta activity.
+        // Si la llamada ya no está en Ringing, cerrar esta pantalla.
         if (call !is CallState.Ringing) onDone()
     }
     val ringing = call as? CallState.Ringing ?: return
@@ -78,7 +80,11 @@ private fun IncomingScreen(onDone: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-            Text("Llamada entrante", color = Color.Gray, fontSize = 18.sp)
+            Text(
+                if (ringing.silenced) "Llamada entrante · silenciada" else "Llamada entrante",
+                color = if (ringing.silenced) Color(0xFFFBBF24) else Color.Gray,
+                fontSize = 18.sp,
+            )
             Spacer(Modifier.height(16.dp))
             Text(
                 text = ringing.displayName ?: ringing.from,
@@ -92,20 +98,50 @@ private fun IncomingScreen(onDone: () -> Unit) {
                 Text(ringing.from, color = Color.Gray, fontSize = 18.sp)
             }
             Spacer(Modifier.height(72.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(48.dp)) {
-                IconButton(
+            Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                ActionButton(
+                    bg = Color(0xFFEF4444),
+                    icon = Icons.Default.CallEnd,
+                    label = "Rechazar",
                     onClick = { scope.launch { ServiceLocator.telephony.reject(); onDone() } },
-                    modifier = Modifier.size(80.dp).background(Color(0xFFEF4444), CircleShape),
-                ) {
-                    Icon(Icons.Default.CallEnd, contentDescription = "Rechazar", tint = Color.White, modifier = Modifier.size(36.dp))
-                }
-                IconButton(
+                )
+                ActionButton(
+                    bg = if (ringing.silenced) Color(0xFF6B7280) else Color(0xFFF59E0B),
+                    icon = Icons.Default.NotificationsOff,
+                    label = if (ringing.silenced) "Silenciada" else "Silenciar",
+                    enabled = !ringing.silenced,
+                    onClick = { scope.launch { ServiceLocator.telephony.silence() } },
+                )
+                ActionButton(
+                    bg = Color(0xFF10B981),
+                    icon = Icons.Default.Call,
+                    label = "Aceptar",
                     onClick = { scope.launch { ServiceLocator.telephony.answer(); onDone() } },
-                    modifier = Modifier.size(80.dp).background(Color(0xFF10B981), CircleShape),
-                ) {
-                    Icon(Icons.Default.Call, contentDescription = "Aceptar", tint = Color.White, modifier = Modifier.size(36.dp))
-                }
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun ActionButton(
+    bg: Color,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier
+                .size(72.dp)
+                .background(bg, CircleShape),
+        ) {
+            Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(32.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(label, color = Color.White, fontSize = 12.sp)
     }
 }

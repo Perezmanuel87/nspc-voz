@@ -25,6 +25,7 @@ sealed class CallState {
         val callId: String,
         val from: String,
         val displayName: String?,
+        val silenced: Boolean = false,
     ) : CallState()
     data class Dialing(
         val callId: String,
@@ -56,6 +57,7 @@ interface TelephonyController {
     suspend fun callOut(phoneE164: String, clienteId: String?, displayName: String?): Result<Unit>
     suspend fun answer()
     suspend fun reject()
+    suspend fun silence()
     suspend fun hangup()
     fun mute(on: Boolean)
     fun hold(on: Boolean)

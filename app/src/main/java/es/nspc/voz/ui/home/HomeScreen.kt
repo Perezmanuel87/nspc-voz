@@ -58,6 +58,7 @@ import es.nspc.voz.core.telephony.CallState
 import es.nspc.voz.core.telephony.RegisterState
 import es.nspc.voz.service.foreground.TelephonyForegroundService
 import es.nspc.voz.ui.call.ActiveCallScreen
+import es.nspc.voz.ui.call.IncomingScreen
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,6 +76,10 @@ fun HomeScreen(onOpenSettings: () -> Unit) {
         historial = ServiceLocator.telefoniaApi.historial(50)
     }
 
+    if (callState is CallState.Ringing) {
+        IncomingScreen(onDone = {})
+        return
+    }
     if (callState !is CallState.Idle) {
         ActiveCallScreen(callState)
         return

@@ -124,17 +124,31 @@ class TelnyxTelephonyController(
             }
             SocketMethod.INVITE.methodName -> {
                 val invite = message.result as? InviteResponse ?: return
+                val from = invite.callerIdNumber ?: "?"
+                // Auto-decline duplicado del mismo número si ya hay Ringing/Active.
+                val current = _callState.value
+                val activeFrom = when (current) {
+                    is CallState.Ringing -> current.from
+                    is CallState.Active -> current.phone
+                    is CallState.Dialing -> current.to
+                    else -> null
+                }
+                if (activeFrom != null && activeFrom == from) {
+                    Log.w(tag, "Duplicate INVITE from $from while busy; auto-declining ${invite.callId}")
+                    runCatching { c.endCall(invite.callId) }
+                    return
+                }
                 pendingInviteCallId = invite.callId
-                pendingInviteFrom = invite.callerIdNumber
+                pendingInviteFrom = from
                 _transcript.value = emptyList()
                 scope.launch {
-                    val cliente = runCatching { api.resolveByPhone(invite.callerIdNumber ?: "") }.getOrNull()
+                    val cliente = runCatching { api.resolveByPhone(from) }.getOrNull()
                     val displayName = cliente?.let { listOfNotNull(it.nombre, it.apellidos).joinToString(" ") }
                     currentClienteId = cliente?.id
                     currentDisplayName = displayName
                     _callState.value = CallState.Ringing(
                         callId = invite.callId.toString(),
-                        from = invite.callerIdNumber ?: "?",
+                        from = from,
                         displayName = displayName,
                     )
                 }
@@ -277,6 +291,13 @@ class TelnyxTelephonyController(
 
     override suspend fun reject() {
         hangup()
+    }
+
+    override suspend fun silence() {
+        val cur = _callState.value
+        if (cur is CallState.Ringing && !cur.silenced) {
+            _callState.value = cur.copy(silenced = true)
+        }
     }
 
     override suspend fun hangup() {
