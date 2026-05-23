@@ -1,5 +1,10 @@
 package es.nspc.voz.ui.call
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -97,6 +102,8 @@ fun ActiveCallScreen(state: CallState) {
                     Text(fmt(elapsedSec), color = Color(0xFF94A3B8), fontSize = 16.sp)
                 }
                 active?.quality?.let { q -> QualityChip(q.level, q.mos) }
+                Spacer(Modifier.height(8.dp))
+                GrabandoChip()
             }
 
             Spacer(Modifier.height(16.dp))
@@ -327,4 +334,31 @@ private fun fmt(secs: Int): String {
     val m = secs / 60
     val s = secs % 60
     return "%d:%02d".format(m, s)
+}
+
+@Composable
+private fun GrabandoChip() {
+    val transition = rememberInfiniteTransition(label = "rec")
+    val alpha by transition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "rec-alpha",
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .background(Color(0xFFEF4444).copy(alpha = alpha), CircleShape),
+        )
+        Spacer(Modifier.size(6.dp))
+        Text(
+            "Grabando",
+            color = Color(0xFFEF4444),
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
 }
