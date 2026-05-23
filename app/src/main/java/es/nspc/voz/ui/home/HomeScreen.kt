@@ -59,6 +59,9 @@ import es.nspc.voz.core.telephony.RegisterState
 import es.nspc.voz.service.foreground.TelephonyForegroundService
 import es.nspc.voz.ui.call.ActiveCallScreen
 import es.nspc.voz.ui.call.IncomingScreen
+import es.nspc.voz.ui.cliente.ClientesScreen
+import es.nspc.voz.ui.common.PendingCall
+import es.nspc.voz.ui.common.RgpdGate
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -70,6 +73,7 @@ fun HomeScreen(onOpenSettings: () -> Unit, onOpenFicha: (String) -> Unit) {
     val callState by ServiceLocator.telephony.callState.collectAsState()
     var tab by remember { mutableStateOf(0) }
     var historial by remember { mutableStateOf<List<HistorialItemDto>>(emptyList()) }
+    var pendingCall by remember { mutableStateOf<PendingCall?>(null) }
 
     LaunchedEffect(Unit) {
         TelephonyForegroundService.start(context)
@@ -108,24 +112,31 @@ fun HomeScreen(onOpenSettings: () -> Unit, onOpenFicha: (String) -> Unit) {
             },
         ) { padding ->
             if (isTablet) {
-                // Tablet: master-detail. Left = recientes. Right = dialer.
+                // Tablet: master-detail. Left = recientes/clientes. Right = dialer.
                 Row(modifier = Modifier
                     .padding(padding)
                     .fillMaxSize()) {
                     Column(modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()) {
-                        Text("Recientes", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
-                        HistorialList(historial, onCall = { phone, name, cid ->
-                            coroutineScope.launch { ServiceLocator.telephony.callOut(phone, cid, name) }
-                        }, onOpenFicha = onOpenFicha)
+                        var panel by remember { mutableStateOf(0) }
+                        TabRow(selectedTabIndex = panel) {
+                            Tab(selected = panel == 0, onClick = { panel = 0 }, text = { Text("Recientes") })
+                            Tab(selected = panel == 1, onClick = { panel = 1 }, text = { Text("Clientes") })
+                        }
+                        when (panel) {
+                            0 -> HistorialList(historial, onCall = { phone, name, cid ->
+                                pendingCall = PendingCall(phone, cid, name)
+                            }, onOpenFicha = onOpenFicha)
+                            1 -> ClientesScreen(onOpenFicha = onOpenFicha)
+                        }
                     }
                     androidx.compose.material3.VerticalDivider()
                     Column(modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()) {
                         Text("Marcar", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp))
-                        DialerTab(onCall = { phone -> coroutineScope.launch { ServiceLocator.telephony.callOut(phone, null, null) } })
+                        DialerTab(onCall = { phone -> pendingCall = PendingCall(phone, null, null) })
                     }
                 }
             } else {
@@ -135,17 +146,30 @@ fun HomeScreen(onOpenSettings: () -> Unit, onOpenFicha: (String) -> Unit) {
                     .fillMaxSize()) {
                     TabRow(selectedTabIndex = tab) {
                         Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Recientes") })
-                        Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Marcar") })
+                        Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Clientes") })
+                        Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Marcar") })
                     }
                     when (tab) {
                         0 -> HistorialList(historial, onCall = { phone, name, cid ->
-                            coroutineScope.launch { ServiceLocator.telephony.callOut(phone, cid, name) }
+                            pendingCall = PendingCall(phone, cid, name)
                         }, onOpenFicha = onOpenFicha)
-                        1 -> DialerTab(onCall = { phone -> coroutineScope.launch { ServiceLocator.telephony.callOut(phone, null, null) } })
+                        1 -> ClientesScreen(onOpenFicha = onOpenFicha)
+                        2 -> DialerTab(onCall = { phone -> pendingCall = PendingCall(phone, null, null) })
                     }
                 }
             }
         }
+
+        RgpdGate(
+            pending = pendingCall,
+            onConfirm = { p ->
+                coroutineScope.launch {
+                    ServiceLocator.telephony.callOut(p.phone, p.clienteId, p.displayName)
+                }
+                pendingCall = null
+            },
+            onDismiss = { pendingCall = null },
+        )
     }
 }
 

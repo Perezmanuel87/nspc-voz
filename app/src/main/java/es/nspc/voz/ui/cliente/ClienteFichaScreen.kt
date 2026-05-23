@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.sp
 import es.nspc.voz.ServiceLocator
 import es.nspc.voz.core.api.ClienteContextoDto
 import es.nspc.voz.core.api.HistorialItemDto
+import es.nspc.voz.ui.common.PendingCall
+import es.nspc.voz.ui.common.RgpdGate
 import kotlinx.coroutines.launch
 
 /**
@@ -60,6 +62,7 @@ fun ClienteFichaScreen(clienteId: String, onBack: () -> Unit) {
     var contexto by remember { mutableStateOf<ClienteContextoDto?>(null) }
     var llamadas by remember { mutableStateOf<List<HistorialItemDto>>(emptyList()) }
     var smsAbierto by remember { mutableStateOf(false) }
+    var pendingCall by remember { mutableStateOf<PendingCall?>(null) }
 
     LaunchedEffect(clienteId) {
         contexto = ServiceLocator.telefoniaApi.getContexto(clienteId)
@@ -95,10 +98,7 @@ fun ClienteFichaScreen(clienteId: String, onBack: () -> Unit) {
                     Button(
                         onClick = {
                             if (telefono != null) {
-                                scope.launch {
-                                    ServiceLocator.telephony.callOut(telefono, clienteId, ctx.cliente.nombre)
-                                }
-                                onBack()
+                                pendingCall = PendingCall(telefono, clienteId, ctx?.cliente?.nombre)
                             }
                         },
                         enabled = telefono != null,
@@ -146,6 +146,18 @@ fun ClienteFichaScreen(clienteId: String, onBack: () -> Unit) {
     if (smsAbierto) {
         EnviarSmsSheet(clienteId = clienteId, onDismiss = { smsAbierto = false })
     }
+
+    RgpdGate(
+        pending = pendingCall,
+        onConfirm = { p ->
+            scope.launch {
+                ServiceLocator.telephony.callOut(p.phone, p.clienteId, p.displayName)
+            }
+            pendingCall = null
+            onBack()
+        },
+        onDismiss = { pendingCall = null },
+    )
 }
 
 @Composable
